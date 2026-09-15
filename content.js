@@ -32,8 +32,15 @@
     "design", "escapefromtarkov", "origin", "psn", "steam", "supercell", "uplay", "warface"
   ]);
 
+  // эти топики вне правил
+  const EXCLUDED_FORUMS = new Set([
+    "381", // оценка товара
+    "832" // ищу работу
+  ]);
+
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
+  const PURCHASE_PREFIX_SELECTOR = ".prefixThreadGroup .prefix.ts_buy, .prefixThreadGroup .prefix.ts_mass_buy";
 
   function getForumKey() {
     const forumLink = document.querySelector(FORUM_LINK_SELECTOR);
@@ -45,9 +52,9 @@
 
   function shouldCheckThread() {
     const forumKey = getForumKey();
-    if (!forumKey) return false;
+    if (!forumKey || EXCLUDED_FORUMS.has(forumKey)) return false;
 
-    return RESTRICTED_FORUMS.has(forumKey);
+    return RESTRICTED_FORUMS.has(forumKey) && !document.querySelector(PURCHASE_PREFIX_SELECTOR);
   }
 
   function getSympathyGroup(sympathies) {
