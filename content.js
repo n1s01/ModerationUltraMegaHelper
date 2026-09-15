@@ -1,6 +1,19 @@
 (() => {
   "use strict";
 
+  const MINIMUM_SYMPATHIES = 200;
+
+  // ренжи
+  const SYMPATHY_GROUPS = [
+    { from: 0, to: 19, name: "Новорег" },
+    { from: 20, to: 199, name: "Местный" },
+    { from: 200, to: 999, name: "Постоялец" },
+    { from: 1_000, to: 3_999, name: "Эксперт" },
+    { from: 4_000, to: 9_999, name: "Гуру" },
+    { from: 10_000, to: 111_110, name: "Искусственный интеллект" },
+    { from: 111_111, to: Infinity, name: "Величайший" }
+  ];
+
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
 
@@ -10,6 +23,12 @@
 
     const pathname = new URL(forumLink.getAttribute("href"), location.origin).pathname;
     return pathname.match(/forums\/([^/]+)/)?.[1] ?? null;
+  }
+
+  function getSympathyGroup(sympathies) {
+    return SYMPATHY_GROUPS.find(({ from, to }) =>
+      sympathies >= from && sympathies <= to
+    ) ?? null;
   }
 
   function getSympathies(post) {
@@ -30,13 +49,20 @@
     const username = post.querySelector(AUTHOR_SELECTOR);
     if (!username) return;
 
+    const sympathies = getSympathies(post);
+    if (sympathies === null) return;
+
+    const group = getSympathyGroup(sympathies);
+    const allowed = sympathies >= MINIMUM_SYMPATHIES;
+
     console.debug(
-      "Lolz Publication Helper: раздел",
-      getForumKey(),
-      "автор",
+      "Lolz Publication Helper: автор",
       username.textContent.trim(),
+      "группа",
+      group?.name ?? "не определена",
       "симпатии",
-      getSympathies(post)
+      sympathies,
+      allowed ? "публикация разрешена" : "публикация запрещена"
     );
   }
 
