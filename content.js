@@ -12,6 +12,17 @@
     return pathname.match(/forums\/([^/]+)/)?.[1] ?? null;
   }
 
+  function getSympathies(post) {
+    const counter = post.querySelector(
+      ".userCounters .userCounter:not(.userCounter--registerDate)"
+    );
+
+    if (!counter?.querySelector(".fa-heart")) return null;
+
+    const value = Number(counter.textContent.replace(/[^\d]/g, ""));
+    return Number.isFinite(value) ? value : null;
+  }
+
   function inspectFirstPost() {
     const post = document.querySelector("li.message.firstPost");
     if (!post) return;
@@ -23,7 +34,9 @@
       "Lolz Publication Helper: раздел",
       getForumKey(),
       "автор",
-      username.textContent.trim()
+      username.textContent.trim(),
+      "симпатии",
+      getSympathies(post)
     );
   }
 
