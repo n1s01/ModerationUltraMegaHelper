@@ -21,6 +21,17 @@
     ["style26", "Легенда"]
   ]);
 
+  const RESTRICTED_FORUMS = new Set([
+    "1001", "1003", "1007", "1014", "1039", "104", "105", "1073", "1077", "1081",
+    "1085", "263", "345", "381", "431", "593", "595", "596", "597", "664", "671",
+    "682", "683", "685", "688", "689", "690", "720", "726", "728", "729", "733",
+    "763", "784", "785", "800", "805", "806", "810", "814", "815", "816", "817",
+    "828", "834", "839", "841", "844", "846", "852", "855", "858", "863", "868",
+    "898", "900", "901", "908", "909", "910", "912", "913", "915", "919", "925",
+    "927", "929", "932", "936", "947", "948", "962", "975",
+    "design", "escapefromtarkov", "origin", "psn", "steam", "supercell", "uplay", "warface"
+  ]);
+
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
 
@@ -30,6 +41,13 @@
 
     const pathname = new URL(forumLink.getAttribute("href"), location.origin).pathname;
     return pathname.match(/forums\/([^/]+)/)?.[1] ?? null;
+  }
+
+  function shouldCheckThread() {
+    const forumKey = getForumKey();
+    if (!forumKey) return false;
+
+    return RESTRICTED_FORUMS.has(forumKey);
   }
 
   function getSympathyGroup(sympathies) {
@@ -95,6 +113,8 @@
     const post = document.querySelector("li.message.firstPost");
     if (!post || post.dataset.lolzPublicationChecked === "true") return;
     if (post.dataset.lolzPublicationLoading === "true") return;
+
+    if (!shouldCheckThread()) return;
 
     if (createLoader(post)) {
       post.dataset.lolzPublicationLoading = "true";
