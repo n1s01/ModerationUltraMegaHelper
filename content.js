@@ -35,7 +35,7 @@
   // эти топики вне правил
   const EXCLUDED_FORUMS = new Set([
     "381", // оценка товара
-    "832" // ищу работу
+    "832" // ищу работу (напишите мне)
   ]);
 
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
@@ -91,6 +91,41 @@
     return Number.isFinite(value) ? value : null;
   }
 
+  function getPublicationDecision(post) {
+    const username = post.querySelector(AUTHOR_SELECTOR);
+    if (!username) return null;
+
+    const styleGroup = getStyleGroup(username);
+    if (styleGroup) {
+      return {
+        allowed: true,
+        group: styleGroup,
+        reason: "распознана привилегия по стилю ника"
+      };
+    }
+
+    if (hasUniqueIcon(username)) {
+      return {
+        allowed: true,
+        group: "Уник",
+        reason: "распознана кастомная иконка ника"
+      };
+    }
+
+    const sympathies = getSympathies(post);
+    if (sympathies === null) return null;
+
+    const group = getSympathyGroup(sympathies);
+    return {
+      allowed: sympathies >= MINIMUM_SYMPATHIES,
+      group: group?.name ?? "не определена",
+      sympathies,
+      reason: sympathies >= MINIMUM_SYMPATHIES
+        ? `достаточно симпатий: минимум ${MINIMUM_SYMPATHIES.toLocaleString("ru-RU")}`
+        : `нужно минимум ${MINIMUM_SYMPATHIES.toLocaleString("ru-RU")} симпатий`
+    };
+  }
+
   function createLoader(post) {
     const username = post.querySelector(AUTHOR_SELECTOR);
     if (!username || post.querySelector(".lolz-publication-loader")) return false;
@@ -112,7 +147,16 @@
     status.textContent = decision.allowed
       ? "✓ Публикация разрешена"
       : "✕ Публикация запрещена";
-    status.title = `Группа: ${decision.group}`;
+
+    const details = [
+      `Группа: ${decision.group}`,
+      decision.sympathies === undefined
+        ? "Симпатии: не проверялись"
+        : `Симпатии: ${decision.sympathies.toLocaleString("ru-RU")}`,
+      `Основание: ${decision.reason}`
+    ];
+
+    status.title = details.join("\n");
     post.querySelector(".lolz-publication-loader")?.remove();
     username.after(status);
     post.dataset.lolzPublicationChecked = "true";
@@ -133,27 +177,8 @@
       return;
     }
 
-    const username = post.querySelector(AUTHOR_SELECTOR);
-    if (!username) return;
-
-    const styleGroup = getStyleGroup(username);
-    if (styleGroup) {
-      renderDecision(post, { allowed: true, group: styleGroup });
-      return;
-    }
-
-    if (hasUniqueIcon(username)) {
-      renderDecision(post, { allowed: true, group: "Уник" });
-      return;
-    }
-
-    const sympathies = getSympathies(post);
-    if (sympathies === null) return;
-
-    renderDecision(post, {
-      allowed: sympathies >= MINIMUM_SYMPATHIES,
-      group: getSympathyGroup(sympathies)?.name ?? "не определена"
-    });
+    const decision = getPublicationDecision(post);
+    if (decision) renderDecision(post, decision);
   }
 
   function activate() {
