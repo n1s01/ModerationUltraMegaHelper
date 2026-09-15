@@ -42,6 +42,8 @@
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
   const PURCHASE_PREFIX_SELECTOR = ".prefixThreadGroup .prefix.ts_buy, .prefixThreadGroup .prefix.ts_mass_buy";
 
+  let observer = null;
+
   function getForumKey() {
     const forumLink = document.querySelector(FORUM_LINK_SELECTOR);
     if (!forumLink) return null;
@@ -121,8 +123,6 @@
     if (!post || post.dataset.lolzPublicationChecked === "true") return;
     if (post.dataset.lolzPublicationLoading === "true") return;
 
-    if (!shouldCheckThread()) return;
-
     if (createLoader(post)) {
       post.dataset.lolzPublicationLoading = "true";
 
@@ -156,5 +156,21 @@
     });
   }
 
-  inspectFirstPost();
+  function activate() {
+    if (!document.querySelector(FORUM_LINK_SELECTOR)) return;
+
+    activationObserver.disconnect();
+    observer?.disconnect();
+    observer = null;
+
+    if (!shouldCheckThread()) return;
+
+    observer = new MutationObserver(inspectFirstPost);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    inspectFirstPost();
+  }
+
+  const activationObserver = new MutationObserver(activate);
+  activationObserver.observe(document.documentElement, { childList: true, subtree: true });
+  activate();
 })();
