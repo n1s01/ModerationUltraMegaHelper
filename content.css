@@ -1,0 +1,21 @@
+.lolz-publication-status {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.lolz-publication-status--allowed {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.lolz-publication-status--denied {
+  background: #7f1d1d;
+  color: #fecaca;
+}

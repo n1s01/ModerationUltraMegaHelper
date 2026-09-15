@@ -64,6 +64,19 @@
     return Number.isFinite(value) ? value : null;
   }
 
+  function renderDecision(post, decision) {
+    const username = post.querySelector(AUTHOR_SELECTOR);
+    if (!username) return;
+
+    const status = document.createElement("span");
+    status.className = `lolz-publication-status lolz-publication-status--${decision.allowed ? "allowed" : "denied"}`;
+    status.textContent = decision.allowed
+      ? "✓ Публикация разрешена"
+      : "✕ Публикация запрещена";
+    status.title = `Группа: ${decision.group}`;
+    username.after(status);
+  }
+
   function inspectFirstPost() {
     const post = document.querySelector("li.message.firstPost");
     if (!post) return;
@@ -73,41 +86,22 @@
 
     const styleGroup = getStyleGroup(username);
     if (styleGroup) {
-      console.debug(
-        "Lolz Publication Helper: автор",
-        username.textContent.trim(),
-        "привилегия",
-        styleGroup,
-        "публикация разрешена"
-      );
+      renderDecision(post, { allowed: true, group: styleGroup });
       return;
     }
 
     if (hasUniqueIcon(username)) {
-      console.debug(
-        "Lolz Publication Helper: автор",
-        username.textContent.trim(),
-        "кастомная иконка",
-        "публикация разрешена"
-      );
+      renderDecision(post, { allowed: true, group: "Уник" });
       return;
     }
 
     const sympathies = getSympathies(post);
     if (sympathies === null) return;
 
-    const group = getSympathyGroup(sympathies);
-    const allowed = sympathies >= MINIMUM_SYMPATHIES;
-
-    console.debug(
-      "Lolz Publication Helper: автор",
-      username.textContent.trim(),
-      "группа",
-      group?.name ?? "не определена",
-      "симпатии",
-      sympathies,
-      allowed ? "публикация разрешена" : "публикация запрещена"
-    );
+    renderDecision(post, {
+      allowed: sympathies >= MINIMUM_SYMPATHIES,
+      group: getSympathyGroup(sympathies)?.name ?? "не определена"
+    });
   }
 
   inspectFirstPost();
