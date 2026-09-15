@@ -1,8 +1,8 @@
 {
-  "manifest_version": 2,
-  "name": "Lolz Publication Helper",
-  "version": "1.1",
-  "description": "Проверка права публикации тем на форумах lolz.team и zelenka.guru",
+  "manifest_version": 3,
+  "name": "ModerationUltraMegaHelper",
+  "version": "67",
+  "description": "Перестань сносить темы за 3.8 когда они этого не заслуживают!",
   "content_scripts": [
     {
       "matches": [
