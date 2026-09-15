@@ -14,6 +14,13 @@
     { from: 111_111, to: Infinity, name: "Величайший" }
   ];
 
+  // классы для покупных групп
+  const STYLE_GROUPS = new Map([
+    ["style8", "Суприм"],
+    ["style11", "Продавец"],
+    ["style26", "Легенда"]
+  ]);
+
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
 
@@ -29,6 +36,21 @@
     return SYMPATHY_GROUPS.find(({ from, to }) =>
       sympathies >= from && sympathies <= to
     ) ?? null;
+  }
+
+  function getStyleGroup(username) {
+    const nickname = username.querySelector(".styleUserNickname");
+    if (!nickname) return null;
+
+    const styleClass = [...nickname.classList].find((className) =>
+      /^style\d+$/.test(className)
+    );
+
+    return styleClass ? STYLE_GROUPS.get(styleClass) ?? null : null;
+  }
+
+  function hasUniqueIcon(username) {
+    return Boolean(username.querySelector(".uniqUsernameIcon--custom"));
   }
 
   function getSympathies(post) {
@@ -48,6 +70,28 @@
 
     const username = post.querySelector(AUTHOR_SELECTOR);
     if (!username) return;
+
+    const styleGroup = getStyleGroup(username);
+    if (styleGroup) {
+      console.debug(
+        "Lolz Publication Helper: автор",
+        username.textContent.trim(),
+        "привилегия",
+        styleGroup,
+        "публикация разрешена"
+      );
+      return;
+    }
+
+    if (hasUniqueIcon(username)) {
+      console.debug(
+        "Lolz Publication Helper: автор",
+        username.textContent.trim(),
+        "кастомная иконка",
+        "публикация разрешена"
+      );
+      return;
+    }
 
     const sympathies = getSympathies(post);
     if (sympathies === null) return;
