@@ -64,6 +64,18 @@
     return Number.isFinite(value) ? value : null;
   }
 
+  function createLoader(post) {
+    const username = post.querySelector(AUTHOR_SELECTOR);
+    if (!username || post.querySelector(".lolz-publication-loader")) return false;
+
+    const loader = document.createElement("span");
+    loader.className = "lolz-publication-loader";
+    loader.title = "Проверяем право публикации…";
+    loader.setAttribute("aria-label", "Проверяем право публикации");
+    username.after(loader);
+    return true;
+  }
+
   function renderDecision(post, decision) {
     const username = post.querySelector(AUTHOR_SELECTOR);
     if (!username) return;
@@ -74,12 +86,25 @@
       ? "✓ Публикация разрешена"
       : "✕ Публикация запрещена";
     status.title = `Группа: ${decision.group}`;
+    post.querySelector(".lolz-publication-loader")?.remove();
     username.after(status);
+    post.dataset.lolzPublicationChecked = "true";
   }
 
   function inspectFirstPost() {
     const post = document.querySelector("li.message.firstPost");
-    if (!post) return;
+    if (!post || post.dataset.lolzPublicationChecked === "true") return;
+    if (post.dataset.lolzPublicationLoading === "true") return;
+
+    if (createLoader(post)) {
+      post.dataset.lolzPublicationLoading = "true";
+
+      window.setTimeout(() => {
+        delete post.dataset.lolzPublicationLoading;
+        inspectFirstPost();
+      }, 150);
+      return;
+    }
 
     const username = post.querySelector(AUTHOR_SELECTOR);
     if (!username) return;

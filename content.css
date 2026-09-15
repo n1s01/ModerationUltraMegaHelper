@@ -10,6 +10,25 @@
   white-space: nowrap;
 }
 
+.lolz-publication-loader {
+  display: inline-block;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  margin-left: 7px;
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  border-top-color: #e2e8f0;
+  border-radius: 50%;
+  animation: lolz-publication-spin 700ms linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes lolz-publication-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .lolz-publication-status--allowed {
   background: #14532d;
   color: #bbf7d0;
