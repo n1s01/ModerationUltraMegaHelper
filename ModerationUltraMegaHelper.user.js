@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.6.0
+// @version      68.7.0
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -60,10 +60,13 @@
   const LIST_LOAD_MARGIN = "500px 0px";
   const USER_CACHE_KEY = "lolz-publication-users-v1";
   const REPORT_HISTORY_KEY = "lolz-publication-reports-v1";
+  const REVIEW_HISTORY_KEY = "lolz-publication-review-v1";
   const MAX_CACHED_USERS = 2_000;
   const userCache = loadUserCache();
   const reportHistory = loadReportHistory();
+  const reviewHistory = loadReviewHistory();
   const reportInFlight = new Set();
+  const reviewContexts = new WeakMap();
   const profileRequests = new Map();
   const requestQueue = [];
   const activeControllers = new Set();
@@ -117,6 +120,31 @@
       background: #713f12;
       color: #fde68a;
     }
+    .lolz-publication-review-actions {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .lolz-publication-review-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 19px;
+      height: 19px;
+      padding: 0;
+      border: 1px solid currentColor;
+      border-radius: 5px;
+      background: transparent;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .lolz-publication-review-action--allow { color: #86efac; }
+    .lolz-publication-review-action--deny { color: #fca5a5; }
+    .lolz-publication-review-action:hover { background: rgba(255, 255, 255, 0.1); }
+    .lolz-publication-review-action:disabled { opacity: 0.45; cursor: not-allowed; }
     .lolz-publication-report {
       display: inline-block;
       margin-left: 6px;
@@ -239,6 +267,38 @@
       if (previous) reportHistory.set(threadId, previous);
       else reportHistory.delete(threadId);
       console.warn("[ModerationUltraMegaHelper] Не удалось сохранить историю жалоб", error);
+      return false;
+    }
+  }
+
+  function loadReviewHistory() {
+    const history = new Map();
+    try {
+      const saved = GM_getValue(REVIEW_HISTORY_KEY, "");
+      if (typeof saved !== "string") throw new Error("неверный формат ручных решений");
+      for (const entry of saved.split(",")) {
+        const match = entry.match(/^([0-9a-z]+)\.([ad])$/);
+        if (!match) continue;
+        const threadId = Number.parseInt(match[1], 36);
+        if (Number.isSafeInteger(threadId)) history.set(String(threadId), match[2]);
+      }
+    } catch (error) {
+      console.warn("[ModerationUltraMegaHelper] Не удалось прочитать ручные решения", error);
+    }
+    return history;
+  }
+
+  function setReviewHistory(threadId, state) {
+    const previous = reviewHistory.get(threadId);
+    reviewHistory.set(threadId, state);
+    try {
+      GM_setValue(REVIEW_HISTORY_KEY, [...reviewHistory]
+        .map(([id, mode]) => `${Number(id).toString(36)}.${mode}`).join(","));
+      return true;
+    } catch (error) {
+      if (previous) reviewHistory.set(threadId, previous);
+      else reviewHistory.delete(threadId);
+      console.warn("[ModerationUltraMegaHelper] Не удалось сохранить ручное решение", error);
       return false;
     }
   }
@@ -398,17 +458,66 @@
 
     username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
     username.parentElement?.querySelector(".lolz-publication-status")?.remove();
+    username.parentElement?.querySelector(".lolz-publication-review-actions")?.remove();
     username.after(status);
   }
 
-  function renderReview(username) {
-    const status = document.createElement("span");
-    status.className = "lolz-publication-status lolz-publication-status--review";
-    status.textContent = "⚠ Нужно проверить";
-    status.title = "В теме есть теги «Куплю» и «Продам». Автоматическая жалоба не отправляется.";
-    username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
-    username.parentElement?.querySelector(".lolz-publication-status")?.remove();
-    username.after(status);
+  function renderReview(username, threadId, postId, token) {
+    reviewContexts.set(username, { threadId, postId, token });
+    const saved = reviewHistory.get(threadId) ?? (reportHistory.has(threadId) ? "d" : null);
+    if (saved) {
+      renderDecision(username, {
+        allowed: saved === "a",
+        group: "Ручная проверка",
+        reason: saved === "a" ? "тема разрешена вручную" : "тема запрещена вручную"
+      });
+      if (saved === "a" || reportHistory.has(threadId) || reportInFlight.has(threadId)) return;
+    }
+
+    if (!saved) {
+      const status = document.createElement("span");
+      status.className = "lolz-publication-status lolz-publication-status--review";
+      status.textContent = "⚠ Нужно проверить";
+      status.title = "В теме есть теги «Куплю» и «Продам». Автоматическая жалоба не отправляется.";
+      username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+      username.parentElement?.querySelector(".lolz-publication-status")?.remove();
+      username.parentElement?.querySelector(".lolz-publication-review-actions")?.remove();
+      username.after(status);
+    }
+
+    const actions = document.createElement("span");
+    actions.className = "lolz-publication-review-actions";
+    const addAction = (kind, symbol, title) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `lolz-publication-review-action lolz-publication-review-action--${kind}`;
+      button.textContent = symbol;
+      button.title = title;
+      button.setAttribute("aria-label", title);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!username.isConnected) return;
+        if (kind === "allow") {
+          if (setReviewHistory(threadId, "a")) {
+            log(`Тема ${threadId}: разрешена вручную`);
+            renderReview(username, threadId, postId, token);
+          }
+        } else if (setReviewHistory(threadId, "d")) {
+          log(`Тема ${threadId}: запрещена вручную, отправляю жалобу`);
+          void sendReport(threadId, postId, token, { manual: true });
+          renderReview(username, threadId, postId, token);
+        }
+      });
+      if (kind === "deny" && (!postId || !token)) {
+        button.disabled = true;
+        button.title = "Нет ID сообщения или CSRF-токена для жалобы";
+      }
+      actions.append(button);
+    };
+    if (!saved) addAction("allow", "✓", "Разрешить тему и запомнить решение");
+    addAction("deny", "✕", saved ? "Повторить жалобу 3.8" : "Запретить тему и отправить жалобу 3.8");
+    username.parentElement?.append(actions);
   }
 
   function renderReportHistory(username, threadId) {
@@ -435,7 +544,9 @@
     if (threadId) renderReportHistory(username, threadId);
 
     if (getThreadPrefixState(document) === "review") {
-      renderReview(username);
+      const postId = post.id.match(/^post-(\d+)$/)?.[1] ?? null;
+      const token = document.querySelector('input[name="_xfToken"]')?.value ?? null;
+      renderReview(username, threadId, postId, token);
       post.dataset.lolzPublicationChecked = "true";
       log(`Тема ${location.pathname}: теги «Куплю» и «Продам», требуется ручная проверка`);
       return;
@@ -531,16 +642,18 @@
     });
   }
 
-  function fetchReportJson(url, options = {}, onStart = null) {
+  function fetchReportJson(url, options = {}, onStart = null, manual = false) {
     return new Promise((resolve, reject) => {
       const task = async () => {
-        if (!autoReport) {
+        if (!manual && !autoReport) {
           reject(new DOMException("Авторепорт выключен", "AbortError"));
           return;
         }
         const controller = new AbortController();
-        activeControllers.add(controller);
-        reportControllers.add(controller);
+        if (!manual) {
+          activeControllers.add(controller);
+          reportControllers.add(controller);
+        }
         const timeout = window.setTimeout(() => controller.abort(), 12_000);
         try {
           onStart?.();
@@ -560,13 +673,18 @@
           reject(error);
         } finally {
           window.clearTimeout(timeout);
-          activeControllers.delete(controller);
-          reportControllers.delete(controller);
+          if (!manual) {
+            activeControllers.delete(controller);
+            reportControllers.delete(controller);
+          }
         }
       };
       task.cancel = () => reject(new DOMException("Проверка списка отключена", "AbortError"));
-      requestQueue.push(task);
-      runRequestQueue();
+      if (manual) void task();
+      else {
+        requestQueue.push(task);
+        runRequestQueue();
+      }
     });
   }
 
@@ -618,16 +736,22 @@
   }
 
   function updateReportBadge(threadId) {
-    const row = document.getElementById(`thread-${threadId}`);
-    const username = row?.querySelector(LIST_AUTHOR_SELECTOR);
-    if (username) renderReportHistory(username, threadId);
+    const listUsername = document.getElementById(`thread-${threadId}`)?.querySelector(LIST_AUTHOR_SELECTOR);
+    const threadUsername = location.pathname.match(/^\/threads\/(\d+)/)?.[1] === threadId
+      ? document.querySelector(`li.message.firstPost ${AUTHOR_SELECTOR}`) : null;
+    for (const username of [listUsername, threadUsername]) {
+      if (!username) continue;
+      renderReportHistory(username, threadId);
+      const context = reviewContexts.get(username);
+      if (context) renderReview(username, context.threadId, context.postId, context.token);
+    }
   }
 
-  async function maybeAutoReport(threadId, postId, token, generation) {
-    if (!autoReport || !checkForumLists || generation !== listGeneration ||
+  async function sendReport(threadId, postId, token, { manual = false, generation = listGeneration } = {}) {
+    if ((!manual && (!autoReport || !checkForumLists || generation !== listGeneration)) ||
         reportHistory.has(threadId) || reportInFlight.has(threadId)) return;
     if (!postId || !token) {
-      log(`Тема ${threadId}: авторепорт пропущен, нет ID первого сообщения или CSRF-токена`);
+      log(`Тема ${threadId}: жалоба пропущена, нет ID первого сообщения или CSRF-токена`);
       return;
     }
 
@@ -642,8 +766,8 @@
         _xfToken: token,
         _xfResponseType: "json"
       });
-      const overlay = await fetchReportJson(`/posts/report?${query}`);
-      if (!autoReport || generation !== listGeneration) return;
+      const overlay = await fetchReportJson(`/posts/report?${query}`, {}, null, manual);
+      if (!manual && (!autoReport || generation !== listGeneration)) return;
       const form = new DOMParser().parseFromString(overlay.templateHtml ?? "", "text/html")
         .querySelector("form._reportForm[action]");
       const action = sameSiteUrl(form?.getAttribute("action"));
@@ -666,18 +790,18 @@
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
         body
-      }, () => { postStarted = true; });
+      }, () => { postStarted = true; }, manual);
       if (result._redirectStatus !== "ok") {
         setReportHistory(threadId, null);
         throw new Error(result.error ?? result._redirectMessage ?? "сервер не подтвердил жалобу");
       }
       setReportHistory(threadId, "r");
-      log(`Тема ${threadId}: авторепорт отправлен, сообщение ${postId}`);
+      log(`Тема ${threadId}: ${manual ? "ручная жалоба" : "авторепорт"} отправлена, сообщение ${postId}`);
     } catch (error) {
       if (!postStarted && reportHistory.get(threadId)?.[0] === "p") {
         setReportHistory(threadId, null);
       }
-      console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: авторепорт не подтверждён`, error);
+      console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: жалоба не подтверждена`, error);
     } finally {
       reportInFlight.delete(threadId);
       updateReportBadge(threadId);
@@ -713,15 +837,15 @@
       if (!threadAuthor || threadAuthor.toLocaleLowerCase() !== username.textContent.trim().toLocaleLowerCase()) {
         throw new Error("автор списка не совпадает с автором темы");
       }
-      renderReportHistory(username, threadId);
-      if (prefixState === "review") {
-        renderReview(username);
-        log(`Тема ${threadId}: теги «Куплю» и «Продам», требуется ручная проверка`);
-        return;
-      }
       firstPostId = thread.querySelector("li.message.firstPost[id^='post-']")?.id.slice(5) ?? null;
       csrfToken = document.querySelector('input[name="_xfToken"]')?.value
         ?? thread.querySelector('input[name="_xfToken"]')?.value ?? null;
+      renderReportHistory(username, threadId);
+      if (prefixState === "review") {
+        renderReview(username, threadId, firstPostId, csrfToken);
+        log(`Тема ${threadId}: теги «Куплю» и «Продам», требуется ручная проверка`);
+        return;
+      }
     } catch (error) {
       if (checkForumLists && generation === listGeneration) {
         username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
@@ -781,7 +905,7 @@
       renderDecision(username, decision);
       log(`Автор ${userKey}: ${decision.allowed ? "разрешено" : "запрещено"}, сохранено в кеш`, decision);
       if (!decision.allowed) {
-        if (autoReport) void maybeAutoReport(threadId, firstPostId, csrfToken, generation);
+        if (autoReport) void sendReport(threadId, firstPostId, csrfToken, { generation });
         else log(`Тема ${threadId}: авторепорт выключен`);
       } else {
         log(`Тема ${threadId}: авторепорт пропущен, публикация разрешена`);
@@ -881,7 +1005,7 @@
     for (const row of document.querySelectorAll(LIST_ROW_SELECTOR)) {
       delete row.dataset.lolzPublicationStarted;
       delete row.dataset.lolzPublicationObserved;
-      row.querySelectorAll(".lolz-publication-loader, .lolz-publication-status, .lolz-publication-report")
+      row.querySelectorAll(".lolz-publication-loader, .lolz-publication-status, .lolz-publication-report, .lolz-publication-review-actions")
         .forEach((item) => item.remove());
     }
     log("Проверка списка тем выключена");
