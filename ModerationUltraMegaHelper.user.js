@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.3.0
+// @version      68.4.0
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -18,7 +18,7 @@
 
   const MINIMUM_SYMPATHIES = 200;
   const LIST_CHECK_SETTING = "checkForumLists";
-  const checkForumLists = GM_getValue(LIST_CHECK_SETTING, true);
+  let checkForumLists = GM_getValue(LIST_CHECK_SETTING, true);
   const LIST_TOGGLE_ID = "lolz-publication-list-toggle";
 
   const SYMPATHY_GROUPS = [
@@ -59,8 +59,13 @@
   const LIST_LOAD_MARGIN = "500px 0px";
   const profileRequests = new Map();
   const requestQueue = [];
+  const activeControllers = new Set();
   let activeRequests = 0;
+  let listGeneration = 0;
   let listVisibilityObserver = null;
+  let listMutationObserver = null;
+  let listScanHandler = null;
+  let listScanTimer = null;
 
   const STYLES = `
     .lolz-publication-status {
@@ -320,8 +325,9 @@
 
   function fetchPage(url) {
     return new Promise((resolve, reject) => {
-      requestQueue.push(async () => {
+      const task = async () => {
         const controller = new AbortController();
+        activeControllers.add(controller);
         const timeout = window.setTimeout(() => controller.abort(), 12_000);
         try {
           const response = await fetch(url, {
@@ -336,8 +342,11 @@
           reject(error);
         } finally {
           window.clearTimeout(timeout);
+          activeControllers.delete(controller);
         }
-      });
+      };
+      task.cancel = () => reject(new DOMException("Проверка списка отключена", "AbortError"));
+      requestQueue.push(task);
       runRequestQueue();
     });
   }
@@ -386,6 +395,7 @@
   }
 
   async function inspectListRow(row) {
+    const generation = listGeneration;
     const threadId = row.id.slice("thread-".length);
     const username = row.querySelector(LIST_AUTHOR_SELECTOR);
     const threadUrl = sameSiteUrl(row.querySelector("a.listBlock.main[href]")?.getAttribute("href"));
@@ -403,6 +413,7 @@
     log(`Тема ${threadId}: проверяю раздел и профиль ${profileUrl.pathname}`);
     try {
       const thread = await fetchPage(threadUrl.href);
+      if (!checkForumLists || generation !== listGeneration) return;
       const forumKey = getForumKey(thread);
       if (!isRestrictedForum(forumKey) || thread.querySelector(PURCHASE_PREFIX_SELECTOR)) {
         log(`Тема ${threadId}: пропущена, раздел ${forumKey ?? "не найден"} или префикс исключён`);
@@ -414,20 +425,25 @@
       }
 
       const { username: profileUsername, sympathies, profile } = await getProfile(profileUrl);
-      if (!row.isConnected || row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
+      if (!checkForumLists || generation !== listGeneration || !row.isConnected ||
+          row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
       const decision = getPublicationDecision(profileUsername, sympathies, profile);
       if (!decision) throw new Error("недостаточно данных для проверки статуса");
       renderDecision(username, decision);
       log(`Тема ${threadId}, раздел ${forumKey}: ${decision.allowed ? "разрешено" : "запрещено"}`, decision);
     } catch (error) {
-      console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ошибка проверки`, error);
+      if (checkForumLists && generation === listGeneration) {
+        console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ошибка проверки`, error);
+      }
     } finally {
-      username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+      if (generation === listGeneration) {
+        username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+      }
     }
   }
 
   function scanList() {
-    if (!isRestrictedForum(getForumKeyFromPath(location.pathname))) return;
+    if (!checkForumLists || !isRestrictedForum(getForumKeyFromPath(location.pathname))) return;
     for (const row of document.querySelectorAll(LIST_ROW_SELECTOR)) {
       if (row.dataset.lolzPublicationStarted === "true") continue;
       if (listVisibilityObserver) {
@@ -444,6 +460,7 @@
   }
 
   function activateList() {
+    if (listMutationObserver) return;
     const forumKey = getForumKeyFromPath(location.pathname);
     if (!isRestrictedForum(forumKey)) {
       log(`Список не проверяется: раздел ${forumKey ?? "не найден"}`);
@@ -451,34 +468,61 @@
     }
     addStyles();
     log(`Проверяю список тем раздела ${forumKey}`);
+    const generation = listGeneration;
     if ("IntersectionObserver" in window) {
-      listVisibilityObserver = new IntersectionObserver((entries) => {
+      const observer = new IntersectionObserver((entries) => {
+        if (!checkForumLists || generation !== listGeneration) return;
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const row = entry.target;
-          listVisibilityObserver.unobserve(row);
+          observer.unobserve(row);
           if (row.dataset.lolzPublicationStarted === "true") continue;
           row.dataset.lolzPublicationStarted = "true";
           void inspectListRow(row);
         }
       }, { rootMargin: LIST_LOAD_MARGIN });
+      listVisibilityObserver = observer;
     }
-    let scheduled = false;
-    const scheduleScan = () => {
-      if (scheduled) return;
-      scheduled = true;
-      window.setTimeout(() => {
-        scheduled = false;
+    listScanHandler = () => {
+      if (listScanTimer !== null || !checkForumLists || generation !== listGeneration) return;
+      listScanTimer = window.setTimeout(() => {
+        listScanTimer = null;
         scanList();
       }, 100);
     };
-    const observer = new MutationObserver(scheduleScan);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    listMutationObserver = new MutationObserver(listScanHandler);
+    listMutationObserver.observe(document.documentElement, { childList: true, subtree: true });
     if (!listVisibilityObserver) {
-      window.addEventListener("scroll", scheduleScan, { passive: true });
-      window.addEventListener("resize", scheduleScan);
+      window.addEventListener("scroll", listScanHandler, { passive: true });
+      window.addEventListener("resize", listScanHandler);
     }
     scanList();
+  }
+
+  function deactivateList() {
+    listGeneration++;
+    listVisibilityObserver?.disconnect();
+    listVisibilityObserver = null;
+    listMutationObserver?.disconnect();
+    listMutationObserver = null;
+    if (listScanHandler) {
+      window.removeEventListener("scroll", listScanHandler);
+      window.removeEventListener("resize", listScanHandler);
+      listScanHandler = null;
+    }
+    if (listScanTimer !== null) {
+      window.clearTimeout(listScanTimer);
+      listScanTimer = null;
+    }
+    for (const task of requestQueue.splice(0)) task.cancel();
+    for (const controller of activeControllers) controller.abort();
+    profileRequests.clear();
+    for (const row of document.querySelectorAll(LIST_ROW_SELECTOR)) {
+      delete row.dataset.lolzPublicationStarted;
+      delete row.dataset.lolzPublicationObserved;
+      row.querySelectorAll(".lolz-publication-loader, .lolz-publication-status").forEach((item) => item.remove());
+    }
+    log("Проверка списка тем выключена");
   }
 
   function mountListToggle() {
@@ -498,8 +542,10 @@
     checkbox.id = LIST_TOGGLE_ID;
     checkbox.checked = checkForumLists;
     checkbox.addEventListener("change", () => {
-      GM_setValue(LIST_CHECK_SETTING, checkbox.checked);
-      location.reload();
+      checkForumLists = checkbox.checked;
+      GM_setValue(LIST_CHECK_SETTING, checkForumLists);
+      if (checkForumLists) activateList();
+      else deactivateList();
     });
     label.append(checkbox, "Проверять 3.8 в списке");
     createTab.after(label);
