@@ -1,9 +1,20 @@
+// ==UserScript==
+// @name         ModerationUltraMegaHelper
+// @namespace    https://lolz.team/
+// @version      67.0.0
+// @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
+// @match        https://lolz.team/threads/*
+// @match        https://zelenka.guru/threads/*
+// @run-at       document-idle
+// @noframes
+// @grant        none
+// ==/UserScript==
+
 (() => {
   "use strict";
 
   const MINIMUM_SYMPATHIES = 200;
 
-  // ренжи
   const SYMPATHY_GROUPS = [
     { from: 0, to: 19, name: "Новорег" },
     { from: 20, to: 199, name: "Местный" },
@@ -14,7 +25,6 @@
     { from: 111_111, to: Infinity, name: "Величайший" }
   ];
 
-  // классы для покупных групп
   const STYLE_GROUPS = new Map([
     ["style8", "Суприм"],
     ["style11", "Продавец"],
@@ -32,17 +42,47 @@
     "design", "escapefromtarkov", "origin", "psn", "steam", "supercell", "uplay", "warface"
   ]);
 
-  // эти топики вне правил
-  const EXCLUDED_FORUMS = new Set([
-    "381", // оценка товара
-    "832" // ищу работу (напишите мне)
-  ]);
-
+  const EXCLUDED_FORUMS = new Set(["381", "832"]);
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
   const PURCHASE_PREFIX_SELECTOR = ".prefixThreadGroup .prefix.ts_buy, .prefixThreadGroup .prefix.ts_mass_buy";
 
-  let observer = null;
+  const STYLES = `
+    .lolz-publication-status {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .lolz-publication-loader {
+      display: inline-block;
+      box-sizing: border-box;
+      width: 12px;
+      height: 12px;
+      margin-left: 7px;
+      border: 2px solid rgba(148, 163, 184, 0.3);
+      border-top-color: #e2e8f0;
+      border-radius: 50%;
+      animation: lolz-publication-spin 700ms linear infinite;
+      vertical-align: -1px;
+    }
+    @keyframes lolz-publication-spin {
+      to { transform: rotate(360deg); }
+    }
+    .lolz-publication-status--allowed {
+      background: #14532d;
+      color: #bbf7d0;
+    }
+    .lolz-publication-status--denied {
+      background: #7f1d1d;
+      color: #fecaca;
+    }
+  `;
 
   function getForumKey() {
     const forumLink = document.querySelector(FORUM_LINK_SELECTOR);
@@ -54,38 +94,28 @@
 
   function shouldCheckThread() {
     const forumKey = getForumKey();
-    if (!forumKey || EXCLUDED_FORUMS.has(forumKey)) return false;
-
-    return RESTRICTED_FORUMS.has(forumKey) && !document.querySelector(PURCHASE_PREFIX_SELECTOR);
-  }
-
-  function getSympathyGroup(sympathies) {
-    return SYMPATHY_GROUPS.find(({ from, to }) =>
-      sympathies >= from && sympathies <= to
-    ) ?? null;
+    return Boolean(
+      forumKey &&
+      RESTRICTED_FORUMS.has(forumKey) &&
+      !EXCLUDED_FORUMS.has(forumKey) &&
+      !document.querySelector(PURCHASE_PREFIX_SELECTOR)
+    );
   }
 
   function getStyleGroup(username) {
     const nickname = username.querySelector(".styleUserNickname");
     if (!nickname) return null;
 
-    const styleClass = [...nickname.classList].find((className) =>
-      /^style\d+$/.test(className)
-    );
-
-    return styleClass ? STYLE_GROUPS.get(styleClass) ?? null : null;
-  }
-
-  function hasUniqueIcon(username) {
-    return Boolean(username.querySelector(".uniqUsernameIcon--custom"));
+    const styleClass = [...nickname.classList].find((className) => /^style\d+$/.test(className));
+    return STYLE_GROUPS.get(styleClass) ?? null;
   }
 
   function getSympathies(post) {
-    const counter = post.querySelector(
+    const counters = post.querySelectorAll(
       ".userCounters .userCounter:not(.userCounter--registerDate)"
     );
-
-    if (!counter?.querySelector(".fa-heart")) return null;
+    const counter = [...counters].find((item) => item.querySelector(".fa-heart"));
+    if (!counter) return null;
 
     const value = Number(counter.textContent.replace(/[^\d]/g, ""));
     return Number.isFinite(value) ? value : null;
@@ -104,7 +134,7 @@
       };
     }
 
-    if (hasUniqueIcon(username)) {
+    if (username.querySelector(".uniqUsernameIcon--custom")) {
       return {
         allowed: true,
         group: "Уник",
@@ -115,7 +145,10 @@
     const sympathies = getSympathies(post);
     if (sympathies === null) return null;
 
-    const group = getSympathyGroup(sympathies);
+    const group = SYMPATHY_GROUPS.find(({ from, to }) =>
+      sympathies >= from && sympathies <= to
+    );
+
     return {
       allowed: sympathies >= MINIMUM_SYMPATHIES,
       group: group?.name ?? "не определена",
@@ -147,16 +180,14 @@
     status.textContent = decision.allowed
       ? "✓ Публикация разрешена"
       : "✕ Публикация запрещена";
-
-    const details = [
+    status.title = [
       `Группа: ${decision.group}`,
       decision.sympathies === undefined
         ? "Симпатии: не проверялись"
         : `Симпатии: ${decision.sympathies.toLocaleString("ru-RU")}`,
       `Основание: ${decision.reason}`
-    ];
+    ].join("\n");
 
-    status.title = details.join("\n");
     post.querySelector(".lolz-publication-loader")?.remove();
     username.after(status);
     post.dataset.lolzPublicationChecked = "true";
@@ -169,7 +200,6 @@
 
     if (createLoader(post)) {
       post.dataset.lolzPublicationLoading = "true";
-
       window.setTimeout(() => {
         delete post.dataset.lolzPublicationLoading;
         inspectFirstPost();
@@ -183,19 +213,28 @@
 
   function activate() {
     if (!document.querySelector(FORUM_LINK_SELECTOR)) return;
-
     activationObserver.disconnect();
-    observer?.disconnect();
-    observer = null;
-
     if (!shouldCheckThread()) return;
 
-    observer = new MutationObserver(inspectFirstPost);
+    const style = document.createElement("style");
+    style.textContent = STYLES;
+    (document.head ?? document.documentElement).append(style);
+
+    const observer = new MutationObserver(inspectFirstPost);
     observer.observe(document.documentElement, { childList: true, subtree: true });
     inspectFirstPost();
   }
 
   const activationObserver = new MutationObserver(activate);
-  activationObserver.observe(document.documentElement, { childList: true, subtree: true });
-  activate();
+
+  function start() {
+    activationObserver.observe(document.documentElement, { childList: true, subtree: true });
+    activate();
+  }
+
+  if (document.documentElement) {
+    start();
+  } else {
+    document.addEventListener("readystatechange", start, { once: true });
+  }
 })();
