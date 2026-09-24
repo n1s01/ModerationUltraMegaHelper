@@ -7,6 +7,6 @@
     "check": "node --check ModerationUltraMegaHelper.user.js && node --check dist/ModerationUltraMegaHelper.min.user.js"
   },
   "devDependencies": {
-    "terser": "5.51.2"
+    "esbuild": "0.28.2"
   }
 }

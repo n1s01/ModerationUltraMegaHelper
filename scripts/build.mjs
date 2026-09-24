@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { minify } from "terser";
+import { transform } from "esbuild";
 
 const sourcePath = "ModerationUltraMegaHelper.user.js";
 const outputPath = "dist/ModerationUltraMegaHelper.min.user.js";
@@ -13,10 +13,12 @@ if (!source.startsWith("// ==UserScript==\n") || headerEnd === -1) {
 
 const header = source.slice(0, headerEnd + headerEndMarker.length);
 const body = source.slice(headerEnd + headerEndMarker.length).trim();
-const result = await minify(body, {
-  compress: { passes: 2 },
-  mangle: true,
-  format: { comments: false }
+const result = await transform(body, {
+  loader: "js",
+  minify: true,
+  charset: "utf8",
+  legalComments: "none",
+  target: "es2020"
 });
 
 if (!result.code) {
@@ -24,4 +26,4 @@ if (!result.code) {
 }
 
 await mkdir("dist", { recursive: true });
-await writeFile(outputPath, `${header}\n\n${result.code}\n`);
+await writeFile(outputPath, `${header}\n\n${result.code.trimEnd()}\n`);
