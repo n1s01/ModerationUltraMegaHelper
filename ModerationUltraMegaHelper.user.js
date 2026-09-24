@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.1.0
+// @version      68.2.0
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -9,13 +9,26 @@
 // @match        https://zelenka.guru/threads/*
 // @run-at       document-idle
 // @noframes
-// @grant        none
+// @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // ==/UserScript==
 
 (() => {
   "use strict";
 
   const MINIMUM_SYMPATHIES = 200;
+  const LIST_CHECK_SETTING = "checkForumLists";
+  const checkForumLists = GM_getValue(LIST_CHECK_SETTING, true);
+
+  GM_registerMenuCommand(
+    `${checkForumLists ? "☑" : "☐"} Проверка в списке тем`,
+    () => {
+      GM_setValue(LIST_CHECK_SETTING, !checkForumLists);
+      location.reload();
+    },
+    { title: "Включить или выключить проверку в списке тем" }
+  );
 
   const SYMPATHY_GROUPS = [
     { from: 0, to: 19, name: "Новорег" },
@@ -481,7 +494,7 @@
 
   function start() {
     if (location.pathname.startsWith("/forums/")) {
-      activateList();
+      if (checkForumLists) activateList();
     } else if (location.pathname.startsWith("/threads/")) {
       activationObserver.observe(document.documentElement, { childList: true, subtree: true });
       activateThread();
