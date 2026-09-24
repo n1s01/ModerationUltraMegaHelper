@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.7.3
+// @version      68.7.4
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -383,10 +383,17 @@
       return "распознана кастомная иконка ника";
     }
 
-    const nicknameStyle = username.querySelector(".styleUserNickname")?.getAttribute("style") ?? "";
+    const nickname = username.querySelector(".styleUserNickname");
+    const nicknameStyle = nickname?.getAttribute("style") ?? "";
     if (/(?:linear|radial|conic)-gradient\s*\(/i.test(nicknameStyle) &&
         /background-clip\s*:\s*text/i.test(nicknameStyle)) {
       return "распознан градиентный ник";
+    }
+
+    if (nickname && ![...nickname.classList].some((name) => /^style\d+$/.test(name)) &&
+        /(?:^|;)\s*color\s*:/i.test(nicknameStyle) &&
+        /(?:^|;)\s*text-shadow\s*:/i.test(nicknameStyle)) {
+      return "распознан кастомный стиль ника";
     }
 
     if (profile?.querySelector(CUSTOM_BADGE_SELECTOR)?.textContent.trim()) {
