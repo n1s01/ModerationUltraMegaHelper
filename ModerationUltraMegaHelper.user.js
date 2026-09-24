@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.7.2
+// @version      68.7.3
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -522,6 +522,15 @@
     username.parentElement?.append(actions);
   }
 
+  function renderCheckedDecision(username, decision, reviewContext = null) {
+    if (reviewContext && !decision?.allowed) {
+      renderReview(username, reviewContext.threadId, reviewContext.postId, reviewContext.token);
+    } else if (decision) {
+      reviewContexts.delete(username);
+      renderDecision(username, decision);
+    }
+  }
+
   function renderReportHistory(username, threadId) {
     const record = reportHistory.get(threadId);
     username.parentElement?.querySelector(".lolz-publication-report")?.remove();
@@ -545,12 +554,16 @@
     const threadId = location.pathname.match(/^\/threads\/(\d+)/)?.[1];
     if (threadId) renderReportHistory(username, threadId);
 
-    if (getThreadPrefixState(document) === "review") {
-      const postId = post.id.match(/^post-(\d+)$/)?.[1] ?? null;
-      const token = document.querySelector('input[name="_xfToken"]')?.value ?? null;
-      renderReview(username, threadId, postId, token);
+    const reviewContext = getThreadPrefixState(document) === "review" ? {
+      threadId,
+      postId: post.id.match(/^post-(\d+)$/)?.[1] ?? null,
+      token: document.querySelector('input[name="_xfToken"]')?.value ?? null
+    } : null;
+    const localDecision = getPublicationDecision(username, getSympathies(post));
+    if (localDecision?.allowed) {
+      renderCheckedDecision(username, localDecision, reviewContext);
       post.dataset.lolzPublicationChecked = "true";
-      log(`Тема ${location.pathname}: теги «Куплю» и «Продам», требуется ручная проверка`);
+      log(`Тема ${location.pathname}: разрешено по данным темы`, localDecision);
       return;
     }
 
@@ -563,15 +576,14 @@
       if (!post.isConnected || post.querySelector(AUTHOR_SELECTOR) !== username) return;
       const decision = getPublicationDecision(profileUsername, sympathies, profile);
       if (!decision) throw new Error("недостаточно данных для проверки статуса");
-      renderDecision(username, decision);
+      renderCheckedDecision(username, decision, reviewContext);
       post.dataset.lolzPublicationChecked = "true";
-      log(`Тема ${location.pathname}: ${decision.allowed ? "разрешено" : "запрещено"}`, decision);
+      log(`Тема ${location.pathname}: ${reviewContext && !decision.allowed ? "нужна ручная проверка" : decision.allowed ? "разрешено" : "запрещено"}`, decision);
     } catch (error) {
-      const localDecision = getPublicationDecision(username, getSympathies(post));
-      if (localDecision?.allowed) {
-        renderDecision(username, localDecision);
+      if (reviewContext) {
+        renderReview(username, reviewContext.threadId, reviewContext.postId, reviewContext.token);
         post.dataset.lolzPublicationChecked = "true";
-        log(`Тема ${location.pathname}: разрешено по данным темы`, localDecision);
+        console.warn(`[ModerationUltraMegaHelper] Тема ${location.pathname}: право автора не подтверждено, нужна ручная проверка`, error);
       } else {
         post.dataset.lolzPublicationChecked = "true";
         console.warn(`[ModerationUltraMegaHelper] Тема ${location.pathname}: профиль автора не проверен`, error);
@@ -852,12 +864,13 @@
     log(`Тема ${threadId}: проверяю раздел и префикс`);
     let firstPostId = null;
     let csrfToken = null;
+    let prefixState = "regular";
     try {
       const thread = await fetchPage(threadUrl.href);
       if (!checkForumLists || generation !== listGeneration || !row.isConnected ||
           row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
       const forumKey = getForumKey(thread);
-      const prefixState = getThreadPrefixState(thread);
+      prefixState = getThreadPrefixState(thread);
       if (!isRestrictedForum(forumKey) || prefixState === "purchase") {
         username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
         log(`Тема ${threadId}: пропущена, раздел ${forumKey ?? "не найден"} или префикс исключён`);
@@ -871,11 +884,6 @@
       csrfToken = document.querySelector('input[name="_xfToken"]')?.value
         ?? thread.querySelector('input[name="_xfToken"]')?.value ?? null;
       renderReportHistory(username, threadId);
-      if (prefixState === "review") {
-        renderReview(username, threadId, firstPostId, csrfToken);
-        log(`Тема ${threadId}: теги «Куплю» и «Продам», требуется ручная проверка`);
-        return;
-      }
     } catch (error) {
       if (checkForumLists && generation === listGeneration) {
         username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
@@ -884,16 +892,19 @@
       return;
     }
 
+    const reviewContext = prefixState === "review"
+      ? { threadId, postId: firstPostId, token: csrfToken } : null;
+
     const userKey = profileUrl.pathname.replace(/\/$/, "").toLocaleLowerCase();
     const fingerprint = nicknameFingerprint(username);
     const cached = getCachedUser(userKey);
     if (cached?.[0] === "s") {
       const decision = getPublicationDecision(username, cached[1]);
-      renderDecision(username, decision);
+      renderCheckedDecision(username, decision, reviewContext);
       log(`Автор ${userKey}: разрешено по сохранённым симпатиям`, decision);
       return;
     }
-    if (cached?.[0] === "u") {
+    if (cached?.[0] === "u" && cached[2] === fingerprint) {
       const decision = getPublicationDecision(username, cached[1]);
       const uniqueDecision = decision?.allowed ? decision : {
         allowed: true,
@@ -901,22 +912,23 @@
         ...(cached[1] === null ? {} : { sympathies: cached[1] }),
         reason: "привилегия подтверждена ранее"
       };
-      renderDecision(username, uniqueDecision);
+      renderCheckedDecision(username, uniqueDecision, reviewContext);
       log(`Автор ${userKey}: разрешено по сохранённому статусу «Уник»`, uniqueDecision);
       return;
     }
     const localDecision = getPublicationDecision(username, null);
-    if (cached && localDecision?.allowed) {
+    if (localDecision?.allowed) {
       const mode = localDecision.group === "Уник" ? "u" : "p";
-      const decision = getPublicationDecision(username, cached[1]);
-      cacheUser(userKey, mode, cached[1], fingerprint);
-      renderDecision(username, decision);
+      const sympathies = cached?.[1] ?? null;
+      const decision = getPublicationDecision(username, sympathies);
+      cacheUser(userKey, mode, sympathies, fingerprint);
+      renderCheckedDecision(username, decision, reviewContext);
       log(`Автор ${userKey}: разрешено по текущему оформлению ника`, decision);
       return;
     }
     if (cached?.[0] === "d" && cached[2] === fingerprint) {
       const decision = getPublicationDecision(username, cached[1]);
-      renderDecision(username, decision);
+      renderCheckedDecision(username, decision, reviewContext);
       log(`Автор ${userKey}: сохранённый отказ, обновляю проверку`, decision);
     }
 
@@ -932,10 +944,11 @@
         ? "s"
         : decision.group === "Уник" ? "u" : decision.allowed ? "p" : "d";
       cacheUser(userKey, mode, sympathies, fingerprint);
-      renderDecision(username, decision);
+      renderCheckedDecision(username, decision, reviewContext);
       log(`Автор ${userKey}: ${decision.allowed ? "разрешено" : "запрещено"}, сохранено в кеш`, decision);
       if (!decision.allowed) {
-        if (autoReport) void sendReport(threadId, firstPostId, csrfToken, { generation });
+        if (reviewContext) log(`Тема ${threadId}: теги «Куплю» и «Продам», нужна ручная проверка`);
+        else if (autoReport) void sendReport(threadId, firstPostId, csrfToken, { generation });
         else log(`Тема ${threadId}: авторепорт выключен`);
       } else {
         log(`Тема ${threadId}: авторепорт пропущен, публикация разрешена`);
@@ -944,8 +957,11 @@
       if (checkForumLists && generation === listGeneration && row.isConnected &&
           row.querySelector(LIST_AUTHOR_SELECTOR) === username) {
         if (localDecision?.allowed) {
-          renderDecision(username, localDecision);
+          renderCheckedDecision(username, localDecision, reviewContext);
           log(`Автор ${userKey}: разрешено по оформлению ника, симпатии не получены`, localDecision);
+        } else if (reviewContext) {
+          renderReview(username, threadId, firstPostId, csrfToken);
+          console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: право автора не подтверждено, нужна ручная проверка`, error);
         } else {
           console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ошибка проверки`, error);
         }
