@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.4.0
+// @version      68.5.0
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -57,6 +57,9 @@
   const LIST_PURCHASE_PREFIX_SELECTOR = ".threadTitle--prefixGroup .ts_buy, .threadTitle--prefixGroup .ts_mass_buy";
   const CUSTOM_BADGE_SELECTOR = ".profilePage .avatarScaler > em.userBanner.wrapped[itemprop='title'] > strong, .profilePage .userBannersBlock > em.userBanner.wrapped[itemprop='title'] > strong";
   const LIST_LOAD_MARGIN = "500px 0px";
+  const USER_CACHE_KEY = "lolz-publication-users-v1";
+  const MAX_CACHED_USERS = 2_000;
+  const userCache = loadUserCache();
   const profileRequests = new Map();
   const requestQueue = [];
   const activeControllers = new Set();
@@ -66,6 +69,7 @@
   let listMutationObserver = null;
   let listScanHandler = null;
   let listScanTimer = null;
+  let cacheSaveTimer = null;
 
   const STYLES = `
     .lolz-publication-status {
@@ -112,6 +116,79 @@
     } else {
       console.info(`[ModerationUltraMegaHelper] ${message}`, details);
     }
+  }
+
+  function currentHour() {
+    return Math.floor(Date.now() / 3_600_000);
+  }
+
+  function loadUserCache() {
+    try {
+      const entries = JSON.parse(window.localStorage.getItem(USER_CACHE_KEY) ?? "[]");
+      if (!Array.isArray(entries)) return new Map();
+      return new Map(entries.filter((entry) => {
+        if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string" ||
+            !Array.isArray(entry[1]) || entry[1].length !== 4) return false;
+        const [mode, sympathies, fingerprint, hour] = entry[1];
+        if (!["s", "u", "p", "d"].includes(mode) ||
+            !(sympathies === null || Number.isSafeInteger(sympathies) && sympathies >= 0) ||
+            typeof fingerprint !== "string" || !Number.isInteger(hour)) return false;
+        if (mode === "s") return sympathies >= MINIMUM_SYMPATHIES;
+        if (mode === "d") return sympathies !== null && sympathies < MINIMUM_SYMPATHIES;
+        return true;
+      }).slice(-MAX_CACHED_USERS));
+    } catch {
+      return new Map();
+    }
+  }
+
+  function saveUserCache() {
+    if (cacheSaveTimer !== null) {
+      window.clearTimeout(cacheSaveTimer);
+      cacheSaveTimer = null;
+    }
+    try {
+      window.localStorage.setItem(USER_CACHE_KEY, JSON.stringify([...userCache]));
+    } catch (error) {
+      console.warn("[ModerationUltraMegaHelper] Не удалось сохранить кеш пользователей", error);
+    }
+  }
+
+  function scheduleCacheSave() {
+    if (cacheSaveTimer !== null) return;
+    cacheSaveTimer = window.setTimeout(saveUserCache, 300);
+  }
+
+  function getCachedUser(key) {
+    const value = userCache.get(key);
+    if (!value) return null;
+    const hour = currentHour();
+    userCache.delete(key);
+    userCache.set(key, value);
+    if (hour - value[3] >= 24) {
+      value[3] = hour;
+      scheduleCacheSave();
+    }
+    return value;
+  }
+
+  function cacheUser(key, mode, sympathies, fingerprint) {
+    userCache.delete(key);
+    userCache.set(key, [mode, sympathies, fingerprint, currentHour()]);
+    while (userCache.size > MAX_CACHED_USERS) {
+      userCache.delete(userCache.keys().next().value);
+    }
+    scheduleCacheSave();
+  }
+
+  function nicknameFingerprint(username) {
+    const nickname = username.querySelector(".styleUserNickname");
+    const value = `${nickname?.className ?? ""}|${nickname?.getAttribute("style") ?? ""}|${Boolean(username.querySelector(".uniqUsernameIcon--custom"))}`;
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+      hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
 
   function getForumKey(doc = document) {
@@ -251,6 +328,7 @@
     ].join("\n");
 
     username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+    username.parentElement?.querySelector(".lolz-publication-status")?.remove();
     username.after(status);
   }
 
@@ -381,7 +459,7 @@
   function getProfile(profileUrl) {
     const key = profileUrl.href;
     if (!profileRequests.has(key)) {
-      profileRequests.set(key, fetchPage(key).then((profile) => {
+      const request = fetchPage(key).then((profile) => {
         if (!profile.querySelector(".profilePage")) throw new Error("профиль не найден в ответе");
         const username = profile.querySelector(".profilePage #page_info_wrap h1.username")
           ?? profile.querySelector(".profilePage h1.username");
@@ -389,7 +467,11 @@
         if (!username) throw new Error("ник в профиле не найден");
         log(`Профиль ${profileUrl.pathname}: симпатии ${sympathies ?? "не найдены"}, статус ${getStyleGroup(username) ?? (getUniqueReason(username, profile) ? "Уник" : "обычный")}`);
         return { username, sympathies, profile };
-      }));
+      }).catch((error) => {
+        profileRequests.delete(key);
+        throw error;
+      });
+      profileRequests.set(key, request);
     }
     return profileRequests.get(key);
   }
@@ -398,10 +480,9 @@
     const generation = listGeneration;
     const threadId = row.id.slice("thread-".length);
     const username = row.querySelector(LIST_AUTHOR_SELECTOR);
-    const threadUrl = sameSiteUrl(row.querySelector("a.listBlock.main[href]")?.getAttribute("href"));
     const profileUrl = sameSiteUrl(username?.getAttribute("data-href"));
-    if (!username || !threadUrl || !profileUrl || !/^\/threads\/\d+\/?$/.test(threadUrl.pathname)) {
-      log(`Тема ${threadId}: пропущена, ссылка на тему или автора не найдена`);
+    if (!username || !profileUrl) {
+      log(`Тема ${threadId}: пропущена, ссылка на автора не найдена`);
       return;
     }
     if (row.querySelector(LIST_PURCHASE_PREFIX_SELECTOR)) {
@@ -409,31 +490,65 @@
       return;
     }
 
-    createLoader(username);
-    log(`Тема ${threadId}: проверяю раздел и профиль ${profileUrl.pathname}`);
-    try {
-      const thread = await fetchPage(threadUrl.href);
-      if (!checkForumLists || generation !== listGeneration) return;
-      const forumKey = getForumKey(thread);
-      if (!isRestrictedForum(forumKey) || thread.querySelector(PURCHASE_PREFIX_SELECTOR)) {
-        log(`Тема ${threadId}: пропущена, раздел ${forumKey ?? "не найден"} или префикс исключён`);
-        return;
-      }
-      const threadAuthor = thread.querySelector(`li.message.firstPost ${AUTHOR_SELECTOR}`)?.textContent.trim();
-      if (threadAuthor && threadAuthor.toLocaleLowerCase() !== username.textContent.trim().toLocaleLowerCase()) {
-        throw new Error("автор списка не совпадает с автором темы");
-      }
+    const userKey = profileUrl.pathname.replace(/\/$/, "").toLocaleLowerCase();
+    const fingerprint = nicknameFingerprint(username);
+    const cached = getCachedUser(userKey);
+    if (cached?.[0] === "s") {
+      const decision = getPublicationDecision(username, cached[1]);
+      renderDecision(username, decision);
+      log(`Автор ${userKey}: разрешено по сохранённым симпатиям`, decision);
+      return;
+    }
+    if (cached?.[0] === "u") {
+      const decision = getPublicationDecision(username, cached[1]);
+      const uniqueDecision = decision?.allowed ? decision : {
+        allowed: true,
+        group: "Уник",
+        ...(cached[1] === null ? {} : { sympathies: cached[1] }),
+        reason: "привилегия подтверждена ранее"
+      };
+      renderDecision(username, uniqueDecision);
+      log(`Автор ${userKey}: разрешено по сохранённому статусу «Уник»`, uniqueDecision);
+      return;
+    }
+    const localDecision = getPublicationDecision(username, null);
+    if (cached && localDecision?.allowed) {
+      const mode = localDecision.group === "Уник" ? "u" : "p";
+      const decision = getPublicationDecision(username, cached[1]);
+      cacheUser(userKey, mode, cached[1], fingerprint);
+      renderDecision(username, decision);
+      log(`Автор ${userKey}: разрешено по текущему оформлению ника`, decision);
+      return;
+    }
+    if (cached?.[0] === "d" && cached[2] === fingerprint) {
+      const decision = getPublicationDecision(username, cached[1]);
+      renderDecision(username, decision);
+      log(`Автор ${userKey}: сохранённый отказ, обновляю проверку`, decision);
+    }
 
+    createLoader(username);
+    log(`Автор ${userKey}: проверяю профиль`);
+    try {
       const { username: profileUsername, sympathies, profile } = await getProfile(profileUrl);
       if (!checkForumLists || generation !== listGeneration || !row.isConnected ||
           row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
       const decision = getPublicationDecision(profileUsername, sympathies, profile);
       if (!decision) throw new Error("недостаточно данных для проверки статуса");
+      const mode = sympathies !== null && sympathies >= MINIMUM_SYMPATHIES
+        ? "s"
+        : decision.group === "Уник" ? "u" : decision.allowed ? "p" : "d";
+      cacheUser(userKey, mode, sympathies, fingerprint);
       renderDecision(username, decision);
-      log(`Тема ${threadId}, раздел ${forumKey}: ${decision.allowed ? "разрешено" : "запрещено"}`, decision);
+      log(`Автор ${userKey}: ${decision.allowed ? "разрешено" : "запрещено"}, сохранено в кеш`, decision);
     } catch (error) {
-      if (checkForumLists && generation === listGeneration) {
-        console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ошибка проверки`, error);
+      if (checkForumLists && generation === listGeneration && row.isConnected &&
+          row.querySelector(LIST_AUTHOR_SELECTOR) === username) {
+        if (localDecision?.allowed) {
+          renderDecision(username, localDecision);
+          log(`Автор ${userKey}: разрешено по оформлению ника, симпатии не получены`, localDecision);
+        } else {
+          console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ошибка проверки`, error);
+        }
       }
     } finally {
       if (generation === listGeneration) {
@@ -553,6 +668,10 @@
   }
 
   const activationObserver = new MutationObserver(activateThread);
+
+  window.addEventListener("pagehide", () => {
+    if (cacheSaveTimer !== null) saveUserCache();
+  });
 
   function start() {
     if (location.pathname.startsWith("/forums/")) {
