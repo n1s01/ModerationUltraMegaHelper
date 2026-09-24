@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.5.0
+// @version      68.5.1
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -480,13 +480,38 @@
     const generation = listGeneration;
     const threadId = row.id.slice("thread-".length);
     const username = row.querySelector(LIST_AUTHOR_SELECTOR);
+    const threadUrl = sameSiteUrl(row.querySelector("a.listBlock.main[href]")?.getAttribute("href"));
     const profileUrl = sameSiteUrl(username?.getAttribute("data-href"));
-    if (!username || !profileUrl) {
-      log(`Тема ${threadId}: пропущена, ссылка на автора не найдена`);
+    if (!username || !profileUrl || !threadUrl || !/^\/threads\/\d+\/?$/.test(threadUrl.pathname)) {
+      log(`Тема ${threadId}: пропущена, ссылка на тему или автора не найдена`);
       return;
     }
     if (row.querySelector(LIST_PURCHASE_PREFIX_SELECTOR)) {
       log(`Тема ${threadId}: пропущена по префиксу «Куплю/Скупаю»`);
+      return;
+    }
+
+    createLoader(username);
+    log(`Тема ${threadId}: проверяю раздел и префикс`);
+    try {
+      const thread = await fetchPage(threadUrl.href);
+      if (!checkForumLists || generation !== listGeneration || !row.isConnected ||
+          row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
+      const forumKey = getForumKey(thread);
+      if (!isRestrictedForum(forumKey) || thread.querySelector(PURCHASE_PREFIX_SELECTOR)) {
+        username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+        log(`Тема ${threadId}: пропущена, раздел ${forumKey ?? "не найден"} или префикс исключён`);
+        return;
+      }
+      const threadAuthor = thread.querySelector(`li.message.firstPost ${AUTHOR_SELECTOR}`)?.textContent.trim();
+      if (threadAuthor && threadAuthor.toLocaleLowerCase() !== username.textContent.trim().toLocaleLowerCase()) {
+        throw new Error("автор списка не совпадает с автором темы");
+      }
+    } catch (error) {
+      if (checkForumLists && generation === listGeneration) {
+        username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
+        console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: не удалось определить раздел`, error);
+      }
       return;
     }
 
