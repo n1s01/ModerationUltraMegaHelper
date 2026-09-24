@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.7.0
+// @version      68.7.1
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -656,8 +656,10 @@
         }
         const timeout = window.setTimeout(() => controller.abort(), 12_000);
         try {
+          const requestUrl = new URL(url, location.origin);
+          if (requestUrl.origin !== location.origin) throw new Error("адрес жалобы вне текущего сайта");
           onStart?.();
-          const response = await fetch(url, {
+          const response = await fetch(requestUrl.href, {
             ...options,
             credentials: "same-origin",
             signal: controller.signal,
