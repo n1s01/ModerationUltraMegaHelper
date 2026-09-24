@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.2.0
+// @version      68.3.0
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -9,7 +9,6 @@
 // @match        https://zelenka.guru/threads/*
 // @run-at       document-idle
 // @noframes
-// @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
 // ==/UserScript==
@@ -20,15 +19,7 @@
   const MINIMUM_SYMPATHIES = 200;
   const LIST_CHECK_SETTING = "checkForumLists";
   const checkForumLists = GM_getValue(LIST_CHECK_SETTING, true);
-
-  GM_registerMenuCommand(
-    `${checkForumLists ? "☑" : "☐"} Проверка в списке тем`,
-    () => {
-      GM_setValue(LIST_CHECK_SETTING, !checkForumLists);
-      location.reload();
-    },
-    { title: "Включить или выключить проверку в списке тем" }
-  );
+  const LIST_TOGGLE_ID = "lolz-publication-list-toggle";
 
   const SYMPATHY_GROUPS = [
     { from: 0, to: 19, name: "Новорег" },
@@ -490,10 +481,42 @@
     scanList();
   }
 
+  function mountListToggle() {
+    if (document.getElementById(LIST_TOGGLE_ID)) return true;
+    const createTab = document.querySelector(
+      'form.DiscussionListOptions a.CreatePersonalExtendedTab[href*="feed/create-tab"]'
+    );
+    if (!createTab) return false;
+
+    const forumCheckbox = document.querySelector("form.DiscussionListOptions #ctrl_online_authors");
+    const label = forumCheckbox?.closest("label")?.cloneNode(false) ?? document.createElement("label");
+    label.className = "button middle checkboxLikeButton";
+    label.style.display = "inline-flex";
+    label.style.marginLeft = "8px";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.id = LIST_TOGGLE_ID;
+    checkbox.checked = checkForumLists;
+    checkbox.addEventListener("change", () => {
+      GM_setValue(LIST_CHECK_SETTING, checkbox.checked);
+      location.reload();
+    });
+    label.append(checkbox, "Проверять 3.8 в списке");
+    createTab.after(label);
+    return true;
+  }
+
   const activationObserver = new MutationObserver(activateThread);
 
   function start() {
     if (location.pathname.startsWith("/forums/")) {
+      if (!isRestrictedForum(getForumKeyFromPath(location.pathname))) return;
+      if (!mountListToggle()) {
+        const toggleObserver = new MutationObserver(() => {
+          if (mountListToggle()) toggleObserver.disconnect();
+        });
+        toggleObserver.observe(document.documentElement, { childList: true, subtree: true });
+      }
       if (checkForumLists) activateList();
     } else if (location.pathname.startsWith("/threads/")) {
       activationObserver.observe(document.documentElement, { childList: true, subtree: true });
