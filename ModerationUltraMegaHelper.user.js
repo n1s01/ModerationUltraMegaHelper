@@ -1,16 +1,18 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.7.1
+// @version      68.7.2
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
 // @match        https://zelenka.guru/forums/*
 // @match        https://zelenka.guru/threads/*
 // @run-at       document-idle
+// @sandbox      JavaScript
 // @noframes
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (() => {
@@ -658,19 +660,40 @@
         try {
           const requestUrl = new URL(url, location.origin);
           if (requestUrl.origin !== location.origin) throw new Error("адрес жалобы вне текущего сайта");
+          const pageJQuery = unsafeWindow.jQuery;
+          if (typeof pageJQuery?.ajax !== "function") {
+            throw new Error("AJAX форума недоступен на странице");
+          }
           onStart?.();
-          const response = await fetch(requestUrl.href, {
-            ...options,
-            credentials: "same-origin",
-            signal: controller.signal,
-            headers: {
-              Accept: "application/json, text/javascript, */*; q=0.01",
-              "X-Requested-With": "XMLHttpRequest",
-              ...options.headers
-            }
+          const result = await new Promise((resolveRequest, rejectRequest) => {
+            const request = pageJQuery.ajax({
+              url: requestUrl.href,
+              type: options.method ?? "GET",
+              data: options.body?.toString(),
+              dataType: "json",
+              ...(options.headers?.["Content-Type"]
+                ? { contentType: options.headers["Content-Type"] }
+                : {})
+            });
+            const abort = () => request.abort();
+            controller.signal.addEventListener("abort", abort, { once: true });
+            request.done((data) => {
+              controller.signal.removeEventListener("abort", abort);
+              resolveRequest(data);
+            });
+            request.fail((xhr, status) => {
+              controller.signal.removeEventListener("abort", abort);
+              if (status === "abort") {
+                rejectRequest(new DOMException("Запрос жалобы прерван", "AbortError"));
+              } else {
+                const error = new Error(`HTTP ${xhr.status || 0}${status === "parsererror" ? " (некорректный JSON)" : ""}`);
+                error.httpStatus = xhr.status;
+                rejectRequest(error);
+              }
+            });
+            if (controller.signal.aborted) request.abort();
           });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          resolve(await response.json());
+          resolve(result);
         } catch (error) {
           reject(error);
         } finally {
@@ -759,6 +782,7 @@
 
     reportInFlight.add(threadId);
     let postStarted = false;
+    let stage = "получение формы жалобы";
     try {
       const requestUri = `${location.pathname}${location.search}`;
       const query = new URLSearchParams({
@@ -768,6 +792,7 @@
         _xfToken: token,
         _xfResponseType: "json"
       });
+      log(`Тема ${threadId}: запрашиваю форму жалобы через AJAX форума`);
       const overlay = await fetchReportJson(`/posts/report?${query}`, {}, null, manual);
       if (!manual && (!autoReport || generation !== listGeneration)) return;
       const form = new DOMParser().parseFromString(overlay.templateHtml ?? "", "text/html")
@@ -788,6 +813,8 @@
         _xfNoRedirect: "1",
         _xfResponseType: "json"
       });
+      stage = "отправка жалобы";
+      log(`Тема ${threadId}: отправляю жалобу 3.8 через AJAX форума`);
       const result = await fetchReportJson(action.href, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
@@ -800,10 +827,11 @@
       setReportHistory(threadId, "r");
       log(`Тема ${threadId}: ${manual ? "ручная жалоба" : "авторепорт"} отправлена, сообщение ${postId}`);
     } catch (error) {
-      if (!postStarted && reportHistory.get(threadId)?.[0] === "p") {
+      if ((!postStarted || (error.httpStatus >= 400 && error.httpStatus < 500)) &&
+          reportHistory.get(threadId)?.[0] === "p") {
         setReportHistory(threadId, null);
       }
-      console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: жалоба не подтверждена`, error);
+      console.warn(`[ModerationUltraMegaHelper] Тема ${threadId}: ${stage} не подтверждена`, error);
     } finally {
       reportInFlight.delete(threadId);
       updateReportBadge(threadId);
