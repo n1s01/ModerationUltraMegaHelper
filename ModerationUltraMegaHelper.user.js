@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ModerationUltraMegaHelper
 // @namespace    https://lolz.team/
-// @version      68.5.1
+// @version      68.5.2
 // @description  Показывает, может ли автор опубликовать тему в выбранных разделах.
 // @match        https://lolz.team/forums/*
 // @match        https://lolz.team/threads/*
@@ -51,10 +51,8 @@
   const EXCLUDED_FORUMS = new Set(["381", "832"]);
   const FORUM_LINK_SELECTOR = '#pageDescription a[href*="forums/"]';
   const AUTHOR_SELECTOR = ".userText > .item > a.username.poster";
-  const PURCHASE_PREFIX_SELECTOR = ".prefixThreadGroup .prefix.ts_buy, .prefixThreadGroup .prefix.ts_mass_buy";
   const LIST_ROW_SELECTOR = ".DiscussionList .discussionListItems .discussionListItem[id^='thread-']";
   const LIST_AUTHOR_SELECTOR = ".listBlock.main .threadCreator[data-href]";
-  const LIST_PURCHASE_PREFIX_SELECTOR = ".threadTitle--prefixGroup .ts_buy, .threadTitle--prefixGroup .ts_mass_buy";
   const CUSTOM_BADGE_SELECTOR = ".profilePage .avatarScaler > em.userBanner.wrapped[itemprop='title'] > strong, .profilePage .userBannersBlock > em.userBanner.wrapped[itemprop='title'] > strong";
   const LIST_LOAD_MARGIN = "500px 0px";
   const USER_CACHE_KEY = "lolz-publication-users-v1";
@@ -209,11 +207,17 @@
     return Boolean(forumKey && RESTRICTED_FORUMS.has(forumKey) && !EXCLUDED_FORUMS.has(forumKey));
   }
 
+  function isPurchaseOnlyThread(doc) {
+    const prefixes = doc.querySelector(".prefixThreadGroup");
+    return Boolean(prefixes?.querySelector(".ts_buy, .ts_mass_buy") &&
+      !prefixes.querySelector(".ts_sell"));
+  }
+
   function shouldCheckThread() {
     const forumKey = getForumKey();
     return Boolean(
       isRestrictedForum(forumKey) &&
-      !document.querySelector(PURCHASE_PREFIX_SELECTOR)
+      !isPurchaseOnlyThread(document)
     );
   }
 
@@ -486,11 +490,6 @@
       log(`Тема ${threadId}: пропущена, ссылка на тему или автора не найдена`);
       return;
     }
-    if (row.querySelector(LIST_PURCHASE_PREFIX_SELECTOR)) {
-      log(`Тема ${threadId}: пропущена по префиксу «Куплю/Скупаю»`);
-      return;
-    }
-
     createLoader(username);
     log(`Тема ${threadId}: проверяю раздел и префикс`);
     try {
@@ -498,7 +497,7 @@
       if (!checkForumLists || generation !== listGeneration || !row.isConnected ||
           row.querySelector(LIST_AUTHOR_SELECTOR) !== username) return;
       const forumKey = getForumKey(thread);
-      if (!isRestrictedForum(forumKey) || thread.querySelector(PURCHASE_PREFIX_SELECTOR)) {
+      if (!isRestrictedForum(forumKey) || isPurchaseOnlyThread(thread)) {
         username.parentElement?.querySelector(".lolz-publication-loader")?.remove();
         log(`Тема ${threadId}: пропущена, раздел ${forumKey ?? "не найден"} или префикс исключён`);
         return;
